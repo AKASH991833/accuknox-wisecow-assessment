@@ -25,3 +25,38 @@ jobs:
           context: .
           push: true
           tags: ${{ steps.image.outputs.name }}:main,${{ steps.image.outputs.name }}:${{ github.sha }}
+
+  cluster-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run Python tests
+        run: python3 -m unittest discover -s tests -v
+      - name: Install kind
+        run: |
+          curl -fsSLo kind https://kind.sigs.k8s.io/dl/v0.27.0/kind-linux-amd64
+          chmod +x kind
+          sudo mv kind /usr/local/bin/kind
+      - name: Create local cluster
+        run: kind create cluster --wait 120s
+      - name: Build and load image
+        run: |
+          docker build -t wisecow:smoke .
+          kind load docker-image wisecow:smoke
+      - name: Deploy and smoke test
+        run: |
+          sed 's#ghcr.io/OWNER/REPOSITORY:main#wisecow:smoke#' k8s/wisecow.yaml | sed '/image: wisecow:smoke/a\          imagePullPolicy: IfNotPresent' | kubectl apply -f -
+          kubectl rollout status deployment/wisecow --timeout=120s
+          kubectl port-forward service/wisecow 8080:80 > /tmp/port-forward.log 2>&1 &
+          forward_pid=$!
+          trap 'kill "$forward_pid" || true' EXIT
+          for i in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:8080/healthz | grep -qx ok; then
+              curl --fail --silent http://127.0.0.1:8080/ | grep -q '<pre>'
+              exit 0
+            fi
+            sleep 2
+          done
+          cat /tmp/port-forward.log
+          kubectl get pods -o wide
+          exit 1

@@ -1,14 +1,18 @@
-# Wisecow - AccuKnox DevOps trainee assessment
+# Wisecow - AccuKnox DevOps assessment
 
-This is a partial draft. The source app and Apache-2.0 license come from https://github.com/nyrahul/wisecow . `server.py` uses fortune and cowsay to serve valid HTTP on port 4499, with `/healthz` returning 200 and errors returning 503. The original upstream `wisecow.sh` is retained for reference.
+This repository adapts the [upstream Wisecow](https://github.com/nyrahul/wisecow) Bash script into a small HTTP service. The upstream `wisecow.sh` and Apache-2.0 license are retained. The Python wrapper runs the same `fortune`/`cowsay` commands, returns valid HTTP responses, escapes generated HTML, and exposes a health endpoint.
 
-The Dockerfile installs fortune-mod, cowsay and fortune data, runs as a non-root user. The Kubernetes Deployment and ClusterIP Service are in `k8s/wisecow.yaml`. The GitHub Actions workflow in `.github/workflows/image.yml` builds and pushes image tags to GHCR on main branch changes. The two selected scripting tasks are `scripts/log_report.py` (404s, top paths/IPs) and `scripts/health_check.py` (2xx up, other status or connection error down).
+## What is included
 
-## Local checks
+- `server.py`: `/` serves cow wisdom, `/healthz` returns `200 ok`, unknown paths return 404, and failed command execution returns 503.
+- `Dockerfile`: installs `fortune`, `cowsay`, and `netcat`; runs as UID 10001 on port 4499.
+- `k8s/wisecow.yaml`: two replicas, resource limits, non-root security context, readiness/liveness probes, and a ClusterIP Service.
+- `k8s/tls-proxy.yaml`: optional nginx TLS-terminating reverse proxy and Service. It requires a TLS Secret named `wisecow-tls` and is only a self-signed demonstration, not a trusted public endpoint.
+- `.github/workflows/image.yml`: on a push to `main`, runs unit tests and a Kind deployment smoke test, builds and publishes `main` and commit-SHA image tags to GitHub Container Registry, and tests HTTPS through the proxy inside Kind.
+- `scripts/log_report.py`: summarizes combined-format access logs, including requests, 404s, popular paths/IPs, and malformed rows.
+- `scripts/health_check.py`: checks an HTTP(S) URL and exits 0 for a 2xx response or 1 when down.
 
-Six Python unit tests passed locally, plus Python syntax compilation, Bash syntax check and YAML parsing. Docker image build, running container, cluster deployment, GitHub workflow execution, TLS and KubeArmor were **not** tested. No live Kubernetes service exists yet. Optional automatic deployment and TLS are not implemented.
-
-## Run and test on a machine with Docker
+## Run locally
 
 ```sh
 docker build -t wisecow:local .
@@ -18,4 +22,32 @@ curl -i http://localhost:4499/
 python3 -m unittest discover -s tests -v
 ```
 
-For Kubernetes, first replace the placeholder image `ghcr.io/OWNER/REPOSITORY:main` in `k8s/wisecow.yaml` with the actual built/published image, then `kubectl apply -f k8s/wisecow.yaml`, check `kubectl rollout status deployment/wisecow`, and `kubectl port-forward service/wisecow 8080:80`. Private GHCR images require an imagePullSecret; credentials must not be committed to the repo. This draft needs an actual image build and cluster verification before anyone claims it is deployed.
+## Run in Kubernetes
+
+Set `ghcr.io/OWNER/REPOSITORY:main` in `k8s/wisecow.yaml` to the correct lowercase image name and make sure the image is accessible to the cluster. For a private package, configure an image pull secret rather than committing credentials. Then:
+
+```sh
+kubectl apply -f k8s/wisecow.yaml
+kubectl rollout status deployment/wisecow
+kubectl port-forward service/wisecow 8080:80
+curl -i http://localhost:8080/healthz
+```
+
+For local Kind testing, build `wisecow:local`, load it with `kind load docker-image wisecow:local`, and change the manifest image to `wisecow:local` with `imagePullPolicy: IfNotPresent`. The CI workflow automates that ephemeral Kind test.
+
+The optional TLS proxy needs a certificate and key in the `wisecow-tls` Kubernetes Secret before applying `k8s/tls-proxy.yaml`. For a real deployment, use a trusted certificate, DNS, and a suitable ingress or load-balancer setup. The self-signed certificate generated during CI lives only in the temporary Kind cluster. It is **not** an internet-accessible HTTPS deployment.
+
+## Verification and limits
+
+Six Python unit tests passed. GitHub Actions built/published the image, deployed it into temporary Kind, and checked both `/healthz` and `/` over HTTP in this [passing run](https://github.com/AKASH991833/accuknox-wisecow-assessment/actions/runs/36382484429). A later [passing run](https://github.com/AKASH991833/accuknox-wisecow-assessment/actions/runs/36382760961) verified HTTPS `/healthz` through nginx with a self-signed certificate in temporary Kind. Both its image and cluster-smoke jobs succeeded. The image-publish job and Kind tests run independently, so the Kind test checks a locally built image, not a pull of the published registry package.
+
+This is an assessment repository, not a continuously hosted service. Automated deployment to an external cluster, a trusted public TLS endpoint, and the optional KubeArmor policy are not implemented. The `main` tag is replaced on each push; use a commit-SHA tag for a fixed version.
+
+## Scripts
+
+```sh
+python3 scripts/log_report.py /var/log/nginx/access.log --top 5
+python3 scripts/health_check.py http://localhost:4499/healthz --timeout 5
+```
+
+Upstream: https://github.com/nyrahul/wisecow (Apache-2.0). See `LICENSE`.

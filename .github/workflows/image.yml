@@ -60,3 +60,21 @@ jobs:
           cat /tmp/port-forward.log
           kubectl get pods -o wide
           exit 1
+      - name: Self-signed TLS proxy smoke test
+        run: |
+          openssl req -x509 -newkey rsa:2048 -nodes -keyout /tmp/tls.key -out /tmp/tls.crt -days 1 -subj '/CN=wisecow.local' -addext 'subjectAltName=DNS:wisecow.local'
+          kubectl create secret tls wisecow-tls --cert=/tmp/tls.crt --key=/tmp/tls.key
+          kubectl apply -f k8s/tls-proxy.yaml
+          kubectl rollout status deployment/wisecow-tls --timeout=120s
+          kubectl port-forward service/wisecow-tls 8443:443 > /tmp/tls-forward.log 2>&1 &
+          forward_pid=$!
+          trap 'kill "$forward_pid" || true' EXIT
+          for i in $(seq 1 30); do
+            if curl --fail --silent --noproxy "*" --cacert /tmp/tls.crt --resolve wisecow.local:8443:127.0.0.1 https://wisecow.local:8443/healthz | grep -qx ok; then
+              exit 0
+            fi
+            sleep 2
+          done
+          cat /tmp/tls-forward.log
+          kubectl describe pods -l app=wisecow-tls
+          exit 1

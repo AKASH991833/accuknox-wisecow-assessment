@@ -1,0 +1,57 @@
+# Demo TLS termination with a self-signed certificate. Not a trusted public endpoint.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wisecow-tls
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: wisecow-tls}
+  template:
+    metadata:
+      labels: {app: wisecow-tls}
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:1.27-alpine
+          ports:
+            - {containerPort: 8443, name: https}
+          volumeMounts:
+            - {name: config, mountPath: /etc/nginx/conf.d, readOnly: true}
+            - {name: certs, mountPath: /etc/nginx/certs, readOnly: true}
+          readinessProbe:
+            tcpSocket: {port: 8443}
+            initialDelaySeconds: 2
+      volumes:
+        - name: config
+          configMap: {name: wisecow-tls-nginx}
+        - name: certs
+          secret: {secretName: wisecow-tls}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: wisecow-tls-nginx
+data:
+  default.conf: |
+    server {
+      listen 8443 ssl;
+      server_name wisecow.local;
+      ssl_certificate /etc/nginx/certs/tls.crt;
+      ssl_certificate_key /etc/nginx/certs/tls.key;
+      ssl_protocols TLSv1.2 TLSv1.3;
+      location / {
+        proxy_pass http://wisecow:80;
+        proxy_set_header Host $host;
+      }
+    }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: wisecow-tls
+spec:
+  selector: {app: wisecow-tls}
+  ports:
+    - {name: https, port: 443, targetPort: 8443}
+  type: ClusterIP

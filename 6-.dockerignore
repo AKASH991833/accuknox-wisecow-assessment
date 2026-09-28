@@ -1,0 +1,7 @@
+.git
+.github
+k8s
+scripts
+tests
+README.md
+*.pyc
